@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Car Racing Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-size: 18px;
+            text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+            pointer-events: none;
+        }
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: white;
+            font-size: 16px;
+            text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+            pointer-events: none;
+            background-color: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-size: 14px;
+            text-shadow: 1px 1px 1px rgba(0,0,0,0.8);
+            background-color: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #startScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.7);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+        }
+        #startButton {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 20px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">3D Car Racing Game</div>
+    <div id="hud">
+        Speed: <span id="speed">0</span> km/h<br>
+        Lap: <span id="lap">0</span>/3<br>
+        Time: <span id="time">00:00.000</span>
+    </div>
+    <div id="controls">
+        Controls:<br>
+        W/↑ - Accelerate<br>
+        S/↓ - Brake/Reverse<br>
+        A/← - Turn Left<br>
+        D/→ - Turn Right<br>
+        R - Reset Car<br>
+        Space - Handbrake
+    </div>
+    <div id="startScreen">
+        <h1>3D Car Racing Game</h1>
+        <p>Complete 3 laps as fast as you can!</p>
+        <button id="startButton">Start Race</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.module.js';
+        import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js';
+        import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/loaders/GLTFLoader.js';
+
+        // Game variables
+        let scene, camera, renderer, controls;
+        let car, track, skybox;
+        let carModel, wheels = [];
+        let carSpeed = 0, carMaxSpeed = 50;
+        let acceleration = 0.2, deceleration = 0.1, brakeForce = 0.4;
+        let steeringAngle = 0, maxSteeringAngle = Math.PI / 6;
+        let steeringSpeed = 0.04;
+        let carDirection = new THREE.Vector3(0, 0, 1);
+        let carPosition = new THREE.Vector3(0, 0.5, 0);
+        let carRotation = new THREE.Euler(0, 0, 0);
+        let cameraOffset = new THREE.Vector3(0, 5, -10);
+        let cameraLookAt = new THREE.Vector3(0, 0, 5);
+        let clock = new THREE.Clock();
+        let delta = 0;
+        let keys = {};
+        let gameStarted = false;
+        let gameTime = 0;
+        let currentLap = 0;
+        let checkpoints = [];
+        let currentCheckpoint = 0;
+        let lapStartTime = 0;
+        let bestLapTime = Infinity;
+        let particles = [];
+        let exhaustParticles = [];
+
+        // Track waypoints for AI and checkpoints
+        const trackWaypoints = [
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(50, 0, 50),
+            new THREE.Vector3(100, 0, 0),
+            new THREE.Vector3(50, 0, -50),
+            new THREE.Vector3(-50, 0, -50),
+            new THREE.Vector3(-100, 0, 0),
+            new THREE.Vector3(-50, 0, 50)
+        ];
+
+        // Initialize the game
+        function init() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x9db3b5, 0.002);
+
+            // Create camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, -10);
+            camera.lookAt(0, 0, 5);
+
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 0.5;
+            document.body.appendChild(renderer.domElement);
+
+            // Add lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(100, 100, 100);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 500;
+            directionalLight.shadow.camera.left = -100;
+            directionalLight.shadow.camera.right = 100;
+            directionalLight.shadow.camera.top = 100;
+            directionalLight.shadow.camera.bottom = -100;
+            scene.add(directionalLight);
+
+            // Create skybox
+            createSkybox();
+
+            // Create track
+            createTrack();
+
+            // Create car
+            createCar();
+
+            // Create checkpoints
+            createCheckpoints();
+
+            // Add event listeners
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('keydown', onKeyDown);
+            window.addEventListener('keyup', onKeyUp);
+
+            // Start button event listener
+            document.getElementById('startButton').addEventListener('click', startGame);
+
+            // Start animation loop
+            animate();
+        }
+
+        function createSkybox() {
+            const loader = new THREE.CubeTextureLoader();
+            const texture = loader.load([
+                'https://threejs.org/examples/textures/cube/skybox/px.jpg',
+                'https://threejs.org/examples/textures/cube/skybox/nx.jpg',
+                'https://threejs.org/examples/textures/cube/skybox/py.jpg',
+                'https://threejs.org/examples/textures/cube/skybox/ny.jpg',
+                'https://threejs.org/examples/textures/cube/skybox/pz.jpg',
+                'https://threejs.org/examples/textures/cube/skybox/nz.jpg',
+            ]);
+            scene.background = texture;
+        }
+
+        function createTrack() {
+            // Create ground
+            const groundGeometry = new THREE.PlaneGeometry(500, 500);
+            const groundMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x1a5e1a,
+                roughness: 0.8,
+                metalness: 0.2
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // Create race track
+            const trackShape = new THREE.Shape();
+            
+            // Create a curved track using the waypoints
+            trackShape.moveTo(trackWaypoints[0].x, trackWaypoints[0].z);
+            
+            for (let i = 0; i < trackWaypoints.length; i++) {
+                const current = trackWaypoints[i];
+                const next = trackWaypoints[(i + 1) % trackWaypoints.length];
+                const control1 = new THREE.Vector3(
+                    current.x + (next.x - current.x) * 0.25,
+                    0,
+                    current.z + (next.z - current.z) * 0.25
+                );
+                const control2 = new THREE.Vector3(
+                    current.x + (next.x - current.x) * 0.75,
+                    0,
+                    current.z + (next.z - current.z) * 0.75
+                );
+                
+                trackShape.bezierCurveTo(
+                    control1.x, control1.z,
+                    control2.x, control2.z,
+                    next.x, next.z
+                );
+            }
+
+            // Create a hole in the track shape (inner track boundary)
+            const holePath = new THREE.Path();
+            const scale = 0.7; // Scale factor for inner track
+            
+            holePath.moveTo(
+                trackWaypoints[0].x * scale, 
+                trackWaypoints[0].z * scale
+            );
+            
+            for (let i = 0; i < trackWaypoints.length; i++) {
+                const current = trackWaypoints[i];
+                const next = trackWaypoints[(i + 1) % trackWaypoints.length];
+                const control1 = new THREE.Vector3(
+                    (current.x + (next.x - current.x) * 0.25) * scale,
+                    0,
+                    (current.z + (next.z - current.z) * 0.25) * scale
+                );
+                const control2 = new THREE.Vector3(
+                    (current.x + (next.x - current.x) * 0.75) * scale,
+                    0,
+                    (current.z + (next.z - current.z) * 0.75) * scale
+                );
+                
+                holePath.bezierCurveTo(
+                    control1.x, control1.z,
+                    control2.x, control2.z,
+                    next.x * scale, next.z * scale
+                );
+            }
+            
+            trackShape.holes.push(holePath);
+
+            const extrudeSettings = {
+                steps: 1,
+                depth: 0.3,
+                bevelEnabled: true,
+                bevelThickness: 0.1,
+                bevelSize: 0.1,
+                bevelOffset: 0,
+                bevelSegments: 3
+            };
+
+            const trackGeometry = new THREE.ExtrudeGeometry(trackShape, extrudeSettings);
+            const trackMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                roughness: 0.7,
+                metalness: 0.2
+            });
+            
+            track = new THREE.Mesh(trackGeometry, trackMaterial);
+            track.rotation.x = -Math.PI / 2;
+            track.position.y = 0.01; // Slightly above ground to prevent z-fighting
+            track.receiveShadow = true;
+            scene.add(track);
+
+            // Add track markings (white lines)
+            const lineGeometry = new THREE.BufferGeometry();
+            const linePoints = [];
+            
+            // Outer track boundary
+            for (let i = 0; i < trackWaypoints.length; i++) {
+                const current = trackWaypoints[i];
+                const next = trackWaypoints[(i + 1) % trackWaypoints.length];
+                
+                // Add points for a curved line
+                for (let t = 0; t <= 1; t += 0.05) {
+                    const point = new THREE.Vector3(
+                        current.x + (next.x - current.x) * t,
+                        0.05, // Slightly above track
+                        current.z + (next.z - current.z) * t
+                    );
+                    linePoints.push(point);
+                }
+            }
+            
+            lineGeometry.setFromPoints(linePoints);
+            const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+            const trackLine = new THREE.Line(lineGeometry, lineMaterial);
+            scene.add(trackLine);
+
+            // Add some decorative elements around the track
+            addTrackDecorations();
+        }
+
+        function addTrackDecorations() {
+            // Add trees
+            const treeGeometry = new THREE.ConeGeometry(2, 8, 8);
+            const treeMaterial = new THREE.MeshStandardMaterial({ color: 0x2d4c1e });
+            const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+
+            for (let i = 0; i < 50; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 100 + Math.random() * 100;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+
+                // Tree trunk
+                const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+                trunk.position.set(x, 1, z);
+                trunk.castShadow = true;
+                scene.add(trunk);
+
+                // Tree top
+                const tree = new THREE.Mesh(treeGeometry, treeMaterial);
+                tree.position.set(x, 6, z);
+                tree.castShadow = true;
+                scene.add(tree);
+            }
+
+            // Add rocks
+            const rockGeometry = new THREE.DodecahedronGeometry(2, 0);
+            const rockMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x888888,
+                roughness: 0.9,
+                metalness: 0.1
+            });
+
+            for (let i = 0; i < 30; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const radius = 80 + Math.random() * 120;
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+
+                const rock = new THREE.Mesh(rockGeometry, rockMaterial);
+                rock.position.set(x, 1, z);
+                rock.scale.set(
+                    0.5 + Math.random() * 0.5,
+                    0.5 + Math.random() * 0.5,
+                    0.5 + Math.random() * 0.5
+                );
+                rock.rotation.set(
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI,
+                    Math.random() * Math.PI
+                );
+                rock.castShadow = true;
+                scene.add(rock);
+            }
+
+            // Add start/finish line
+            const startLineGeometry = new THREE.BoxGeometry(20, 0.1, 3);
+            const startLineMaterial = new THREE.MeshStandardMaterial({
+                color: 0xffffff,
+                roughness: 0.5,
+                metalness: 0.2
+            });
+            const startLine = new THREE.Mesh(startLineGeometry, startLineMaterial);
+            startLine.position.set(0, 0.05, 0);
+            startLine.receiveShadow = true;
+            scene.add(startLine);
+
+            // Checkered pattern for start/finish line
+            const checkerSize = 1;
+            const checkerGeometry = new THREE.BoxGeometry(checkerSize, 0.11, checkerSize);
+            const blackMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+            
+            for (let i = 0; i < 20 / checkerSize; i++) {
+                for (let j = 0; j < 3 / checkerSize; j++) {
+                    if ((i + j) % 2 === 1) {
+                        const checker = new THREE.Mesh(checkerGeometry, blackMaterial);
+                        checker.position.set(
+                            -10 + i * checkerSize + checkerSize/2,
+                            0.06,
+                            -1.5 + j * checkerSize + checkerSize/2
+                        );
+                        scene.add(checker);
+                    }
+                }
+            }
+        }
+
+        function createCar() {
+            // Create a simple car model
+            const carGroup = new THREE.Group();
+            
+            // Car body
+            const bodyGeometry = new THREE.BoxGeometry(2, 0.75, 4);
+            const bodyMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xff0000,
+                roughness: 0.2,
+                metalness: 0.8
+            });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.5;
+            body.castShadow = true;
+            carGroup.add(body);
+            
+            // Car cabin
+            const cabinGeometry = new THREE.BoxGeometry(1.5, 0.5, 2);
+            const cabinMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                roughness: 0.1,
+                metalness: 0.9,
+                transparent: true,
+                opacity: 0.7
+            });
+            const cabin = new THREE.Mesh(cabinGeometry, cabinMaterial);
+            cabin.position.set(0, 1.15, 0);
+            cabin.castShadow = true;
+            carGroup.add(cabin);
+            
+            // Car nose
+            const noseGeometry = new THREE.BoxGeometry(2, 0.5, 1);
+            const nose = new THREE.Mesh(noseGeometry, bodyMaterial);
+            nose.position.set(0, 0.5, 1.5);
+            nose.castShadow = true;
+            carGroup.add(nose);
+            
+            // Car tail
+            const tailGeometry = new THREE.BoxGeometry(2, 0.5, 0.5);
+            const tail = new THREE.Mesh(tailGeometry, bodyMaterial);
+            tail.position.set(0, 0.5, -1.75);
+            tail.castShadow = true;
+            carGroup.add(tail);
+            
+            // Wheels
+            const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+            const wheelMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                roughness: 0.7,
+                metalness: 0.5
+            });
+            
+            // Front left wheel
+            const wheelFL = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheelFL.rotation.z = Math.PI / 2;
+            wheelFL.position.set(-1, 0.4, 1.2);
+            wheelFL.castShadow = true;
+            carGroup.add(wheelFL);
+            wheels.push(wheelFL);
+            
+            // Front right wheel
+            const wheelFR = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheelFR.rotation.z = Math.PI / 2;
+            wheelFR.position.set(1, 0.4, 1.2);
+            wheelFR.castShadow = true;
+            carGroup.add(wheelFR);
+            wheels.push(wheelFR);
+            
+            // Rear left wheel
+            const wheelRL = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheelRL.rotation.z = Math.PI / 2;
+            wheelRL.position.set(-1, 0.4, -1.2);
+            wheelRL.castShadow = true;
+            carGroup.add(wheelRL);
+            wheels.push(wheelRL);
+            
+            // Rear right wheel
+            const wheelRR = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheelRR.rotation.z = Math.PI / 2;
+            wheelRR.position.set(1, 0.4, -1.2);
+            wheelRR.castShadow = true;
+            carGroup.add(wheelRR);
+            wheels.push(wheelRR);
+            
+            // Headlights
+            const headlightGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+            const headlightMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xffffcc,
+                emissive: 0xffffcc,
+                emissiveIntensity: 1
+            });
+            
+            const headlightL = new THREE.Mesh(headlightGeometry, headlightMaterial);
+            headlightL.position.set(-0.6, 0.5, 2);
+            carGroup.add(headlightL);
+            
+            const headlightR = new THREE.Mesh(headlightGeometry, headlightMaterial);
+            headlightR.position.set(0.6, 0.5, 2);
+            carGroup.add(headlightR);
+            
+            // Add headlight illumination
+            const headlightLightL = new THREE.SpotLight(0xffffcc, 1, 30, Math.PI / 6, 0.5, 1);
+            headlightLightL.position.set(-0.6, 0.5, 2);
+            headlightLightL.target.position.set(-0.6, 0, 10);
+            carGroup.add(headlightLightL);
+            carGroup.add(headlightLightL.target);
+            
+            const headlightLightR = new THREE.SpotLight(0xffffcc, 1, 30, Math.PI / 6, 0.5, 1);
+            headlightLightR.position.set(0.6, 0.5, 2);
+            headlightLightR.target.position.set(0.6, 0, 10);
+            carGroup.add(headlightLightR);
+            carGroup.add(headlightLightR.target);
+            
+            // Taillights
+            const taillightGeometry = new THREE.BoxGeometry(0.3, 0.1, 0.1);
+            const taillightMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xff0000,
+                emissive: 0xff0000,
+                emissiveIntensity: 1
+            });
+            
+            const taillightL = new THREE.Mesh(taillightGeometry, taillightMaterial);
+            taillightL.position.set(-0.8, 0.5, -2);
+            carGroup.add(taillightL);
+            
+            const taillightR = new THREE.Mesh(taillightGeometry, taillightMaterial);
+            taillightR.position.set(0.8, 0.5, -2);
+            carGroup.add(taillightR);
+            
+            // Exhaust pipe
+            const exhaustGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.3, 8);
+            const exhaustMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x666666,
+                roughness: 0.4,
+                metalness: 0.8
+            });
+            
+            const exhaust = new THREE.Mesh(exhaustGeometry, exhaustMaterial);
+            exhaust.rotation.x = Math.PI / 2;
+            exhaust.position.set(-0.7, 0.3, -2);
+            carGroup.add(exhaust);
+            
+            // Add car to scene
+            car = carGroup;
+            car.position.copy(carPosition);
+            car.rotation.copy(carRotation);
+            scene.add(car);
+            
+            // Create particle system for tire smoke
+            createParticleSystems();
+        }
+
+        function createParticleSystems() {
+            // Tire smoke particles
+            for (let i = 0; i < 200; i++) {
+                const particle = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.05, 8, 8),
+                    new THREE.MeshBasicMaterial({ 
+                        color: 0xcccccc,
+                        transparent: true,
+                        opacity: 0.8
+                    })
+                );
+                particle.visible = false;
+                particle.userData = {
+                    velocity: new THREE.Vector3(),
+                    active: false,
+                    life: 0,
+                    maxLife: 60
+                };
+                scene.add(particle);
+                particles.push(particle);
+            }
+            
+            // Exhaust particles
+            for (let i = 0; i < 50; i++) {
+                const particle = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.05, 8, 8),
+                    new THREE.MeshBasicMaterial({ 
+                        color: 0x333333,
+                        transparent: true,
+                        opacity: 0.6
+                    })
+                );
+                particle.visible = false;
+                particle.userData = {
+                    velocity: new THREE.Vector3(),
+                    active: false,
+                    life: 0,
+                    maxLife: 30
+                };
+                scene.add(particle);
+                exhaustParticles.push(particle);
+            }
+        }
+
+        function createCheckpoints() {
+            // Create invisible checkpoint markers around the track
+            for (let i = 0; i < trackWaypoints.length; i++) {
+                const checkpoint = new THREE.Mesh(
+                    new THREE.BoxGeometry(10, 5, 10),
+                    new THREE.MeshBasicMaterial({ 
+                        color: 0x00ff00,
+                        transparent: true,
+                        opacity: 0.2,
+                        wireframe: true
+                    })
+                );
+                checkpoint.position.set(
+                    trackWaypoints[i].x,
+                    2.5,
+                    trackWaypoints[i].z
+                );
+                checkpoint.visible = false; // Make checkpoints invisible
+                scene.add(checkpoint);
+                checkpoints.push(checkpoint);
+            }
+        }
+
+        function startGame() {
+            document.getElementById('startScreen').style.display = 'none';
+            gameStarted = true;
+            currentLap = 1;
+            document.getElementById('lap').textContent = currentLap;
+            lapStartTime = clock.getElapsedTime();
+            gameTime = 0;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            keys[event.key.toLowerCase()] = true;
+        }
+
+        function onKeyUp(event) {
+            keys[event.key.toLowerCase()] = false;
+        }
+
+        function updateCar() {
+            if (!gameStarted) return;
+            
+            // Handle car controls
+            if ((keys['w'] || keys['arrowup']) && carSpeed < carMaxSpeed) {
+                carSpeed += acceleration;
+            }
+            
+            if ((keys['s'] || keys['arrowdown'])) {
+                if (carSpeed > 0) {
+                    carSpeed -= brakeForce;
+                } else if (carSpeed > -carMaxSpeed / 2) {
+                    carSpeed -= acceleration / 2;
+                }
+            }
+            
+            if (!(keys['w'] || keys['arrowup']) && !(keys['s'] || keys['arrowdown'])) {
+                if (carSpeed > 0) {
+                    carSpeed -= deceleration;
+                } else if (carSpeed < 0) {
+                    carSpeed += deceleration;
+                }
+                
+                if (Math.abs(carSpeed) < deceleration) {
+                    carSpeed = 0;
+                }
+            }
+            
+            if ((keys['a'] || keys['arrowleft']) && Math.abs(carSpeed) > 0.1) {
+                steeringAngle = Math.min(steeringAngle + steeringSpeed, maxSteeringAngle);
+            } else if ((keys['d'] || keys['arrowright']) && Math.abs(carSpeed) > 0.1) {
+                steeringAngle = Math.max(steeringAngle - steeringSpeed, -maxSteeringAngle);
+            } else {
+                // Return steering to center
+                if (steeringAngle > 0) {
+                    steeringAngle = Math.max(steeringAngle - steeringSpeed, 0);
+                } else if (steeringAngle < 0) {
+                    steeringAngle = Math.min(steeringAngle + steeringSpeed, 0);
+                }
+            }
+            
+            // Apply handbrake
+            if (keys[' '] && carSpeed > 0) {
+                carSpeed -= brakeForce * 2;
+                // Generate more tire smoke when handbraking
+                emitTireSmoke(5);
+            }
+            
+            // Reset car position
+            if (keys['r']) {
+                resetCar();
+            }
+            
+            // Update car direction based on steering
+            if (Math.abs(carSpeed) > 0.1) {
+                // Calculate turn amount based on speed and steering angle
+                const turnAmount = (carSpeed / carMaxSpeed) * steeringAngle * (carSpeed > 0 ? 1 : -1);
+                car.rotation.y += turnAmount;
+                
+                // Update car direction vector
+                carDirection.set(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+                
+                // Rotate wheels for steering
+                wheels[0].rotation.y = steeringAngle;
+                wheels[1].rotation.y = steeringAngle;
+                
+                // Rotate wheels for movement
+                const wheelRotationSpeed = carSpeed * 0.1;
+                wheels.forEach(wheel => {
+                    wheel.rotation.x += wheelRotationSpeed;
+                });
+                
+                // Generate tire smoke when turning at high speed
+                if (Math.abs(turnAmount) > 0.01 && Math.abs(carSpeed) > carMaxSpeed * 0.7) {
+                    emitTireSmoke(2);
+                }
+            }
+            
+            // Update car position
+            carPosition.add(carDirection.clone().multiplyScalar(carSpeed * delta));
+            car.position.copy(carPosition);
+            
+            // Generate exhaust particles
+            if (Math.random() < 0.3 && Math.abs(carSpeed) > 0.5) {
+                emitExhaustParticle();
+            }
+            
+            // Update HUD
+            document.getElementById('speed').textContent = Math.abs(Math.round(carSpeed * 10));
+            
+            // Check for checkpoints and lap completion
+            checkCheckpoints();
+        }
+
+        function emitTireSmoke(count) {
+            // Get wheel positions in world space
+            const wheelPositions = wheels.map(wheel => {
+                const position = new THREE.Vector3();
+                wheel.getWorldPosition(position);
+                return position;
+            });
+            
+            // Emit particles from rear wheels
+            for (let i = 0; i < count; i++) {
+                // Choose a random rear wheel (index 2 or 3)
+                const wheelIndex = Math.random() < 0.5 ? 2 : 3;
+                const wheelPos = wheelPositions[wheelIndex];
+                
+                // Find an inactive particle
+                for (let j = 0; j < particles.length; j++) {
+                    if (!particles[j].userData.active) {
+                        const particle = particles[j];
+                        particle.position.copy(wheelPos);
+                        particle.position.y = 0.2;
+                        
+                        // Random velocity
+                        particle.userData.velocity.set(
+                            (Math.random() - 0.5) * 0.1,
+                            Math.random() * 0.1,
+                            (Math.random() - 0.5) * 0.1
+                        );
+                        
+                        particle.userData.active = true;
+                        particle.userData.life = 0;
+                        particle.userData.maxLife = 30 + Math.random() * 30;
+                        particle.visible = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        function emitExhaustParticle() {
+            // Calculate exhaust position in world space
+            const exhaustPos = new THREE.Vector3(-0.7, 0.3, -2);
+            exhaustPos.applyMatrix4(car.matrixWorld);
+            
+            // Find an inactive particle
+            for (let i = 0; i < exhaustParticles.length; i++) {
+                if (!exhaustParticles[i].userData.active) {
+                    const particle = exhaustParticles[i];
+                    particle.position.copy(exhaustPos);
+                    
+                    // Velocity in the opposite direction of the car
+                    const exhaustDir = carDirection.clone().negate();
+                    particle.userData.velocity.set(
+                        exhaustDir.x * 0.1 + (Math.random() - 0.5) * 0.05,
+                        Math.random() * 0.1,
+                        exhaustDir.z * 0.1 + (Math.random() - 0.5) * 0.05
+                    );
+                    
+                    particle.userData.active = true;
+                    particle.userData.life = 0;
+                    particle.userData.maxLife = 15 + Math.random() * 15;
+                    particle.visible = true;
+                    break;
+                }
+            }
+        }
+
+        function updateParticles() {
+            // Update tire smoke particles
+            for (let i = 0; i < particles.length; i++) {
+                const particle = particles[i];
+                if (particle.userData.active) {
+                    particle.position.add(particle.userData.velocity);
+                    particle.userData.life++;
+                    
+                    // Fade out particle
+                    const lifeRatio = particle.userData.life / particle.userData.maxLife;
+                    particle.material.opacity = 0.8 * (1 - lifeRatio);
+                    particle.scale.set(1 + lifeRatio, 1 + lifeRatio, 1 + lifeRatio);
+                    
+                    if (particle.userData.life >= particle.userData.maxLife) {
+                        particle.userData.active = false;
+                        particle.visible = false;
+                    }
+                }
+            }
+            
+            // Update exhaust particles
+            for (let i = 0; i < exhaustParticles.length; i++) {
+                const particle = exhaustParticles[i];
+                if (particle.userData.active) {
+                    particle.position.add(particle.userData.velocity);
+                    particle.userData.life++;
+                    
+                    // Fade out particle
+                    const lifeRatio = particle.userData.life / particle.userData.maxLife;
+                    particle.material.opacity = 0.6 * (1 - lifeRatio);
+                    particle.scale.set(1 + lifeRatio * 2, 1 + lifeRatio * 2, 1 + lifeRatio * 2);
+                    
+                    if (particle.userData.life >= particle.userData.maxLife) {
+                        particle.userData.active = false;
+                        particle.visible = false;
+                    }
+                }
+            }
+        }
+
+        function checkCheckpoints() {
+            // Check if car is within checkpoint
+            const checkpoint = checkpoints[currentCheckpoint];
+            const distance = car.position.distanceTo(checkpoint.position);
+            
+            if (distance < 10) {
+                // Move to next checkpoint
+                currentCheckpoint = (currentCheckpoint + 1) % checkpoints.length;
+                
+                // If we've reached the start/finish line again
+                if (currentCheckpoint === 0) {
+                    // Complete lap
+                    const currentTime = clock.getElapsedTime();
+                    const lapTime = currentTime - lapStartTime;
+                    lapStartTime = currentTime;
+                    
+                    // Update best lap time
+                    if (lapTime < bestLapTime) {
+                        bestLapTime = lapTime;
+                    }
+                    
+                    // Increment lap counter
+                    currentLap++;
+                    document.getElementById('lap').textContent = currentLap;
+                    
+                    // Check if race is complete (3 laps)
+                    if (currentLap > 3) {
+                        endRace();
+                    }
+                }
+            }
+        }
+
+        function endRace() {
+            gameStarted = false;
+            
+            // Show race completion message
+            const startScreen = document.getElementById('startScreen');
+            startScreen.style.display = 'flex';
+            startScreen.innerHTML = `
+                <h1>Race Complete!</h1>
+                <p>Total Time: ${formatTime(clock.getElapsedTime())}</p>
+                <p>Best Lap: ${formatTime(bestLapTime)}</p>
+                <button id="restartButton">Restart Race</button>
+            `;
+            
+            // Add restart button event listener
+            document.getElementById('restartButton').addEventListener('click', () => {
+                // Reset game state
+                resetCar();
+                currentLap = 0;
+                currentCheckpoint = 0;
+                bestLapTime = Infinity;
+                
+                // Restart game
+                startGame();
+            });
+        }
+
+        function resetCar() {
+            // Reset car position to start
+            carPosition.set(0, 0.5, 0);
+            car.position.copy(carPosition);
+            
+            // Reset car rotation
+            car.rotation.set(0, 0, 0);
+            carRotation.set(0, 0, 0);
+            
+            // Reset car direction
+            carDirection.set(0, 0, 1);
+            
+            // Reset car speed and steering
+            carSpeed = 0;
+            steeringAngle = 0;
+        }
+
+        function updateCamera() {
+            // Calculate camera position based on car
+            const idealOffset = cameraOffset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+            const idealLookAt = cameraLookAt.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), car.rotation.y);
+            
+            // Smooth camera movement
+            const cameraPosition = car.position.clone().add(idealOffset);
+            const targetPosition = car.position.clone().add(idealLookAt);
+            
+            camera.position.lerp(cameraPosition, 0.1);
+            camera.lookAt(targetPosition);
+        }
+
+        function updateGameTime() {
+            if (gameStarted) {
+                gameTime = clock.getElapsedTime() - lapStartTime + (currentLap - 1) * bestLapTime;
+                document.getElementById('time').textContent = formatTime(gameTime);
+            }
+        }
+
+        function formatTime(time) {
+            const minutes = Math.floor(time / 60);
+            const seconds = Math.floor(time % 60);
+            const milliseconds = Math.floor((time % 1) * 1000);
+            
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(3, '0')}`;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            delta = clock.getDelta();
+            
+            if (gameStarted) {
+                updateCar();
+                updateParticles();
+                updateGameTime();
+            }
+            
+            updateCamera();
+            renderer.render(scene, camera);
+        }
+
+        // Initialize the game
+        init();
+    </script>
+</body>
+</html>
